@@ -1,7 +1,8 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.stats import f_oneway
+from scipy.stats import ttest_ind, kstest
+from statsmodels.stats.weightstats import ztest
 from kaggle_install import path
 
 csv_path = path + f"\\incom2024_delay_example_dataset.csv"
@@ -40,12 +41,11 @@ def profit_analysis_by_one_category(df, ctype):
         sample_std = np.std(profit_per_order)
         sample_size = len(profit_per_order)
 
-        f_statistic, p_value = f_oneway(profit_per_order, global_profit_per_order)
-        print(f_statistic, p_value)
+        _, p_value = kstest(profit_per_order, global_profit_per_order)
         if 0.05 < p_value:
             continue
 
-        print("significant:", category_type)
+        print(f"Significant ({p_value}):", category_type, f"(mean: {str(sample_avg)[0:5]}, std: {str(sample_std)[0:5]})")
         [ucl, lcl] = [sample_avg - 2*sample_std, sample_avg + 2*sample_std]
         order_index_arr = range(sample_size)
         plt.plot(order_index_arr, profit_per_order)
@@ -55,7 +55,17 @@ def profit_analysis_by_one_category(df, ctype):
         plt.plot(order_index_arr, [lcl]*sample_size, color='y', linestyle='dashed', linewidth=1)
         plt.xlabel("Order number")
         plt.ylabel("Profit per order")
-        plt.title("Profit per order for " + category_type)
+        plt.title("Profit Per Order for " + category_type)
         plt.show()
 
+def numerical_distribution(df):
+    n_bins = 1000
+    profit_per_order = np.array(df["profit_per_order"].tolist())
+    plt.hist(profit_per_order, bins=n_bins)
+    plt.xlim(global_sample_avg-250, global_sample_avg+250)
+    plt.show()
+
+print("sample avg:", global_sample_avg)
+print("sample std:", global_sample_std)
 profit_analysis_by_one_category(data_frame, "customer_city")
+#numerical_distribution(data_frame)
