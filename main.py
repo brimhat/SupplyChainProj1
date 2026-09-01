@@ -58,6 +58,42 @@ def profit_analysis_by_one_category(df, ctype):
         plt.title("Profit Per Order for " + category_type)
         plt.show()
 
+def profit_analysis_by_n_categories(df, ctypes):
+    data_dict = {}
+    order_number = range(0,len(df))
+    for row in order_number:
+        category_types = []
+        for ctype in ctypes:
+            category_types.append(df[ctype].iloc[row])
+        profit = df["profit_per_order"].iloc[row]
+        try:
+            data_dict[tuple(category_types)].append(profit)
+        except KeyError:
+            data_dict[tuple(category_types)] = [profit]
+
+    for category_types in data_dict.keys():
+        profit_per_order = np.array(data_dict[category_types])
+        sample_size = len(profit_per_order)
+        _, p_value = kstest(profit_per_order, global_profit_per_order)
+        if 0.05 < p_value or sample_size < 5:
+            continue
+
+        sample_avg = np.mean(profit_per_order)
+        sample_std = np.std(profit_per_order)
+        print(f"Significant ({p_value}):", str(category_types), f"(mean: {str(sample_avg)[0:5]}, std: {str(sample_std)[0:5]})")
+
+        [ucl, lcl] = [sample_avg - 2*sample_std, sample_avg + 2*sample_std]
+        order_index_arr = range(sample_size)
+        plt.plot(order_index_arr, profit_per_order)
+        plt.plot(order_index_arr, [global_ucl]*sample_size, color='r', linestyle='dashed', linewidth=1)
+        plt.plot(order_index_arr, [global_lcl]*sample_size, color='r', linestyle='dashed', linewidth=1)
+        plt.plot(order_index_arr, [ucl]*sample_size, color='y', linestyle='dashed', linewidth=1)
+        plt.plot(order_index_arr, [lcl]*sample_size, color='y', linestyle='dashed', linewidth=1)
+        plt.xlabel("Order number")
+        plt.ylabel("Profit per order")
+        plt.title("Profit Per Order for " + str(category_types))
+        plt.show()
+
 def numerical_distribution(df):
     n_bins = 1000
     profit_per_order = np.array(df["profit_per_order"].tolist())
@@ -67,5 +103,7 @@ def numerical_distribution(df):
 
 print("sample avg:", global_sample_avg)
 print("sample std:", global_sample_std)
-profit_analysis_by_one_category(data_frame, "customer_city")
+#profit_analysis_by_one_category(data_frame, "customer_city")
 #numerical_distribution(data_frame)
+#profit_analysis_by_n_categories(data_frame, ["customer_city", "order_city"])
+profit_analysis_by_n_categories(data_frame, ["customer_city"])
