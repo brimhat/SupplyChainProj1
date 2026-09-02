@@ -25,9 +25,9 @@ def broad_profit_analysis(df):
 
 def subset_vs_compliment_ks_test(subset, compliment, n_permutations=1_000):
     if len(subset) < 2:
-        raise ValueError("Category must have at least 2 observations.")
+        raise ValueError("Subset must have at least 2 observations.")
     if len(compliment) < 2:
-        raise ValueError("Compliment of category must have at least 2 observations.")
+        raise ValueError("Compliment of subset must have at least 2 observations.")
 
     observed_ks_stat, _ = ks_2samp(compliment, subset)
 
@@ -47,10 +47,65 @@ def subset_vs_compliment_ks_test(subset, compliment, n_permutations=1_000):
     print(p_value)
     return observed_ks_stat, p_value
 
+def fast_subset_vs_compliment_ks_test(df, subset, compliment, subset_indices, n_permutations=100_000, chunk_size=10_000):
+    parent_values = df['profit_per_order'].to_numpy()
+    (big_N, n) = (len(parent_values), len(subset))
+    if n < 2:
+        raise ValueError("Subset must have at least 2 observations.")
+    if big_N <= n:
+        raise ValueError("Compliment of subset must have at least 2 observations.")
+
+    observed_ks_stat, _ = ks_2samp(subset, compliment)
+
+    sort_order = np.argsort(parent_values)
+    parent_sorted = parent_values[sort_order]
+    inverse_order = np.empty(big_N, dtype=np.int64)
+    inverse_order[sort_order] = np.arange(big_N)
+    observed_positions = np.sort( inverse_order[subset_indices] )
+
+    def ks_from_positions(positions):
+        j = np.arange(n)
+        before = positions
+        selected_before = j
+        remaining_before = before - selected_before
+        d_before = (selected_before / n) - (remaining_before / (big_N - n))
+
+        selected_after = j + 1
+        remaining_after = remaining_before
+        d_after = (selected_after / n) - (remaining_after / (big_N - n))
+
+        return np.max(
+            np.maximum(np.abs(d_before), np.abs(d_after)),
+            axis=1
+        )
+
+    observed_positions_2d = observed_positions.reshape(1,-1)
+    observed_ks_stat_fast = ks_from_positions(observed_positions_2d)[0]
+
+    if not np.isclose(observed_ks_stat, observed_ks_stat_fast):
+        raise RuntimeError(
+            "Optimized KS calculation disagrees with scipy. "
+            "This can occur when there are many tied values. "
+            f"Scipy result: {observed_ks_stat}; Optimized result: {observed_ks_stat_fast}"
+        )
+
+    rng = np.random.default_rng(42)
+    permutation_statistics = np.empty(n_permutations, dtype=np.float64)
+
+    start = 0
+    while start < n_permutations:
+        end = min(start + chunk_size, n_permutations)
+        batch_size = end - start
+
+        random_positions = rng.choice(big_N, size=(batch_size,n), replace=False)
+        random_positions.sort(axis=1)
+
+        permutation_statistics[start:end] = ks_from_positions(random_positions)
+        start = end
+    p_value = (1 + np.sum(permutation_statistics >= observed_ks_stat)) / (n_permutations + 1)
+    return observed_ks_stat, p_value
 
 def profit_analysis_by_one_category(df, ctype):
-    data_dict = {}
-    order_number = range(0,len(df))
     data = df[[ctype, 'profit_per_order']]
     category_types = data[ctype].unique()
 
@@ -59,16 +114,22 @@ def profit_analysis_by_one_category(df, ctype):
         category_values = data.loc[category_mask, 'profit_per_order'].to_numpy()
         compliment = data.loc[~category_mask, 'profit_per_order'].to_numpy()
 
-        if len(compliment) < 2 or len(category_values) < 2:
+        try:
+            _, p_value = fast_subset_vs_compliment_ks_test(
+                data,
+                category_values,
+                compliment,
+                np.flatnonzero(category_mask)
+            )
+        except ValueError:
+            continue
+
+        if 0.05 < p_value:
             continue
 
         sample_avg = np.mean(category_values)
         sample_std = np.std(category_values)
         sample_size = len(category_values)
-
-        _, p_value = subset_vs_compliment_ks_test(category_values, compliment)
-        if 0.05 < p_value:
-            continue
 
         print(f"Significant ({p_value}):", category_type, f"(mean: {str(sample_avg)[0:5]}, std: {str(sample_std)[0:5]})")
         [ucl, lcl] = [sample_avg - 2*sample_std, sample_avg + 2*sample_std]
