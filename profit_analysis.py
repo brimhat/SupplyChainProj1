@@ -1,8 +1,7 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.stats import ttest_ind, kstest
-from statsmodels.stats.weightstats import ztest
+from scipy.stats import kstest
 from kaggle_install import path
 
 csv_path = path + f"\\incom2024_delay_example_dataset.csv"
@@ -101,9 +100,51 @@ def numerical_distribution(df):
     plt.xlim(global_sample_avg-250, global_sample_avg+250)
     plt.show()
 
+def generate_profit_transition_matrix(time_series):
+    snd_pos_std = global_sample_avg + 2*global_sample_std
+    fst_pos_std = global_sample_avg + 1*global_sample_std
+    fst_neg_std = global_sample_avg - 1*global_sample_std
+    snd_neg_std = global_sample_avg - 2*global_sample_std
+    stds_arr = [
+        (snd_pos_std, 99999999999),
+        (fst_pos_std, snd_pos_std),
+        (global_sample_avg, fst_pos_std),
+        (fst_neg_std, global_sample_avg),
+        (snd_neg_std, fst_neg_std),
+        (-99999999999, snd_neg_std),
+    ]
+    transition_dict = {}
+    for current_range in stds_arr:
+        for next_range in stds_arr:
+            transition_dict[(current_range, next_range)] = 0
+
+    for n in range(len(time_series)-1):
+        item_handled = False
+        for (current_range, next_range) in transition_dict.keys():
+            (current_lb, current_ub) = current_range
+            (next_lb, next_ub) = next_range
+            if current_lb < time_series[n] < current_ub and next_lb < time_series[n+1] < next_ub:
+                item_handled = True
+                transition_dict[(current_range, next_range)] += 1
+        if not item_handled:
+            raise KeyError(f"Items not within any range of transition dict: ({time_series[n]}, {time_series[n+1]})")
+
+    transition_matrix = []
+    transition_step_nums = transition_dict.values()
+    for n in range(0, len(transition_step_nums), 6):
+        transition_step_slice = np.array(list(transition_step_nums)[n:n+6])
+        row_sum = transition_step_slice.sum()
+        transition_matrix_row = transition_step_slice/row_sum
+        if np.round(transition_matrix_row.sum(), 7) != 1:
+            raise Exception(f"Transition matrix row sum does not equal 1: {transition_matrix_row}.sum() == {transition_matrix_row.sum()}")
+        transition_matrix.append(transition_matrix_row)
+    return transition_matrix
+
 print("sample avg:", global_sample_avg)
 print("sample std:", global_sample_std)
 #profit_analysis_by_one_category(data_frame, "customer_city")
 #numerical_distribution(data_frame)
 #profit_analysis_by_n_categories(data_frame, ["customer_city", "order_city"])
-profit_analysis_by_n_categories(data_frame, ["customer_city"])
+#profit_analysis_by_n_categories(data_frame, ["customer_city"])
+generate_profit_transition_matrix(global_profit_per_order)
+broad_profit_analysis(data_frame)
