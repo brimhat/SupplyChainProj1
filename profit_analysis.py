@@ -1,7 +1,7 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.stats import kstest
+from scipy.stats import kstest, ks_2samp
 from kaggle_install import path
 
 csv_path = path + f"\\incom2024_delay_example_dataset.csv"
@@ -23,31 +23,57 @@ def broad_profit_analysis(df):
     plt.ylabel("Profit per order")
     plt.show()
 
+def subset_vs_compliment_ks_test(subset, compliment, n_permutations=1_000):
+    if len(subset) < 2:
+        raise ValueError("Category must have at least 2 observations.")
+    if len(compliment) < 2:
+        raise ValueError("Compliment of category must have at least 2 observations.")
+
+    observed_ks_stat, _ = ks_2samp(compliment, subset)
+
+    rng = np.random.default_rng(42)
+    permutation_statistics = np.empty(n_permutations)
+    for i in range(n_permutations):
+        random_indices = rng.choice(len(global_profit_per_order), size=len(subset), replace=False)
+        random_values = global_profit_per_order[random_indices]
+
+        mask = np.ones(len(global_profit_per_order), dtype=bool)
+        mask[random_indices] = False
+        random_compliment = global_profit_per_order[mask]
+
+        permuted_ks_stat, _ = ks_2samp(random_values, random_compliment)
+        permutation_statistics[i] = permuted_ks_stat
+    p_value = (1 + np.sum(permutation_statistics >= observed_ks_stat)) / (n_permutations + 1)
+    print(p_value)
+    return observed_ks_stat, p_value
+
+
 def profit_analysis_by_one_category(df, ctype):
     data_dict = {}
     order_number = range(0,len(df))
-    for row in order_number:
-        category_type = df[ctype].iloc[row]
-        profit = df["profit_per_order"].iloc[row]
-        try:
-            data_dict[category_type].append(profit)
-        except KeyError:
-            data_dict[category_type] = [profit]
+    data = df[[ctype, 'profit_per_order']]
+    category_types = data[ctype].unique()
 
-    for category_type in data_dict.keys():
-        profit_per_order = np.array(data_dict[category_type])
-        sample_avg = np.mean(profit_per_order)
-        sample_std = np.std(profit_per_order)
-        sample_size = len(profit_per_order)
+    for category_type in category_types:
+        category_mask = data[ctype].eq(category_type)
+        category_values = data.loc[category_mask, 'profit_per_order'].to_numpy()
+        compliment = data.loc[~category_mask, 'profit_per_order'].to_numpy()
 
-        _, p_value = kstest(profit_per_order, global_profit_per_order)
+        if len(compliment) < 2 or len(category_values) < 2:
+            continue
+
+        sample_avg = np.mean(category_values)
+        sample_std = np.std(category_values)
+        sample_size = len(category_values)
+
+        _, p_value = subset_vs_compliment_ks_test(category_values, compliment)
         if 0.05 < p_value:
             continue
 
         print(f"Significant ({p_value}):", category_type, f"(mean: {str(sample_avg)[0:5]}, std: {str(sample_std)[0:5]})")
         [ucl, lcl] = [sample_avg - 2*sample_std, sample_avg + 2*sample_std]
         order_index_arr = range(sample_size)
-        plt.plot(order_index_arr, profit_per_order)
+        plt.plot(order_index_arr, category_values)
         plt.plot(order_index_arr, [global_ucl]*sample_size, color='r', linestyle='dashed', linewidth=1)
         plt.plot(order_index_arr, [global_lcl]*sample_size, color='r', linestyle='dashed', linewidth=1)
         plt.plot(order_index_arr, [ucl]*sample_size, color='y', linestyle='dashed', linewidth=1)
@@ -74,7 +100,7 @@ def profit_analysis_by_n_categories(df, ctypes):
         profit_per_order = np.array(data_dict[category_types])
         sample_size = len(profit_per_order)
         _, p_value = kstest(profit_per_order, global_profit_per_order)
-        if 0.05 < p_value or sample_size < 5:
+        if 0.05 < p_value or sample_size < 10:
             continue
 
         sample_avg = np.mean(profit_per_order)
@@ -93,9 +119,12 @@ def profit_analysis_by_n_categories(df, ctypes):
         plt.title("Profit Per Order for " + str(category_types))
         plt.show()
 
-def numerical_distribution(df):
+def numerical_distribution():
     n_bins = 1000
-    profit_per_order = np.array(df["profit_per_order"].tolist())
+    profit_per_order = global_profit_per_order
+    quantiles = [ 0.01, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99 ]
+    for q in quantiles:
+        print(f"{format(q, ".0%")} Quantile:", np.quantile(profit_per_order, q))
     plt.hist(profit_per_order, bins=n_bins)
     plt.xlim(global_sample_avg-250, global_sample_avg+250)
     plt.show()
@@ -142,9 +171,9 @@ def generate_profit_transition_matrix(time_series):
 
 print("sample avg:", global_sample_avg)
 print("sample std:", global_sample_std)
-#profit_analysis_by_one_category(data_frame, "customer_city")
-#numerical_distribution(data_frame)
+profit_analysis_by_one_category(data_frame, "customer_city")
+#numerical_distribution()
 #profit_analysis_by_n_categories(data_frame, ["customer_city", "order_city"])
 #profit_analysis_by_n_categories(data_frame, ["customer_city"])
-generate_profit_transition_matrix(global_profit_per_order)
-broad_profit_analysis(data_frame)
+#generate_profit_transition_matrix(global_profit_per_order)
+#broad_profit_analysis(data_frame)
