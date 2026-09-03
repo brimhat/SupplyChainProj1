@@ -44,82 +44,148 @@ def subset_vs_compliment_ks_test(subset, compliment, n_permutations=1_000):
         permuted_ks_stat, _ = ks_2samp(random_values, random_compliment)
         permutation_statistics[i] = permuted_ks_stat
     p_value = (1 + np.sum(permutation_statistics >= observed_ks_stat)) / (n_permutations + 1)
-    print(p_value)
     return observed_ks_stat, p_value
 
-def fast_subset_vs_compliment_ks_test(df, subset, compliment, subset_indices, n_permutations=100_000, chunk_size=10_000):
-    parent_values = df['profit_per_order'].to_numpy()
-    (big_N, n) = (len(parent_values), len(subset))
+def fast_subset_vs_compliment_ks_test(df, category_mask, n_permutations=100_000, chunk_size=10_000, random_state=42):
+    parent_values = df["profit_per_order"].to_numpy()
+    category_mask = np.asarray(category_mask, dtype=bool)
+
+    valid = np.isfinite(parent_values)
+    parent_values = parent_values[valid]
+    category_mask = category_mask[valid]
+    big_N = len(parent_values)
+
+    subset = parent_values[category_mask]
+    complement = parent_values[~category_mask]
+
+    (m,n) = (len(complement), len(subset))
+
     if n < 2:
         raise ValueError("Subset must have at least 2 observations.")
-    if big_N <= n:
-        raise ValueError("Compliment of subset must have at least 2 observations.")
+    if m < 2:
+        raise ValueError("Complement must have at least 2 observations.")
 
-    observed_ks_stat, _ = ks_2samp(subset, compliment)
+    observed_ks_stat = ks_2samp(subset, complement).statistic
 
     sort_order = np.argsort(parent_values)
-    parent_sorted = parent_values[sort_order]
-    inverse_order = np.empty(big_N, dtype=np.int64)
-    inverse_order[sort_order] = np.arange(big_N)
-    observed_positions = np.sort( inverse_order[subset_indices] )
+    sorted_values = parent_values[sort_order]
+    sorted_category = category_mask[sort_order]
 
-    def ks_from_positions(positions):
-        j = np.arange(n)
-        before = positions
-        selected_before = j
-        remaining_before = before - selected_before
-        d_before = (selected_before / n) - (remaining_before / (big_N - n))
+    unique_values, group_start, group_counts = np.unique(
+        sorted_values,
+        return_index=True,
+        return_counts=True
+    )
 
-        selected_after = j + 1
-        remaining_after = remaining_before
-        d_after = (selected_after / n) - (remaining_after / (big_N - n))
+    sorted_subset = sorted_category.astype(np.int64)
+    cumulative_subset = np.cumsum(sorted_subset)
+    cumulative_complement = (
+            np.arange(1, big_N + 1)
+            - cumulative_subset
+    )
 
-        return np.max(
-            np.maximum(np.abs(d_before), np.abs(d_after)),
-            axis=1
-        )
+    # Values at the END of each tie group
+    group_end = group_start + group_counts - 1
+    subset_after = cumulative_subset[group_end]
+    complement_after = cumulative_complement[group_end]
 
-    observed_positions_2d = observed_positions.reshape(1,-1)
-    observed_ks_stat_fast = ks_from_positions(observed_positions_2d)[0]
+    # ECDF immediately after each unique value
+    subset_ecdf_after = subset_after / n
+    complement_ecdf_after = complement_after / m
 
+    observed_ks_stat_fast = np.max(
+        np.abs(subset_ecdf_after - complement_ecdf_after)
+    )
+
+    # Debugging; should be close to scipy value
     if not np.isclose(observed_ks_stat, observed_ks_stat_fast):
+        print("========== KS DEBUG ==========")
+
+        print("Parent size:      ", len(parent_values))
+        print("Mask size:        ", len(category_mask))
+        print("Subset size:      ", n)
+        print("Complement size:  ", m)
+        print("Mask dtype:       ", category_mask.dtype)
+        print("Profit dtype:     ", parent_values.dtype)
+        print("NaNs:             ", np.isnan(parent_values).sum())
+        print("Infs:             ", np.isinf(parent_values).sum())
+        print("Finite:           ", np.isfinite(parent_values).sum())
+
+        # Check for ties across the ENTIRE parent dataset
+        print("Unique profits:   ", len(np.unique(parent_values)))
+        print("Has ties:         ", len(np.unique(parent_values)) != len(parent_values))
+
+        # Verify subset + complement reconstruct the parent
+        reconstructed = np.concatenate([subset, complement])
+
+        print("Partition sizes:  ", len(reconstructed) == len(parent_values))
+        print(
+            "Same observations:",
+            np.array_equal(
+                np.sort(reconstructed),
+                np.sort(parent_values)
+            )
+        )
+        print("==============================")
         raise RuntimeError(
-            "Optimized KS calculation disagrees with scipy. "
-            "This can occur when there are many tied values. "
-            f"Scipy result: {observed_ks_stat}; Optimized result: {observed_ks_stat_fast}"
+            f"Optimized KS calculation disagrees with scipy.\n"
+            f"SciPy result:     {observed_ks_stat:.15f}\n"
+            f"Optimized result: {observed_ks_stat_fast:.15f}\n"
+            f"Difference:       {np.abs(observed_ks_stat - observed_ks_stat_fast):.15e}"
         )
 
-    rng = np.random.default_rng(42)
+    rng = np.random.default_rng(random_state)
+
     permutation_statistics = np.empty(n_permutations, dtype=np.float64)
 
     start = 0
     while start < n_permutations:
         end = min(start + chunk_size, n_permutations)
         batch_size = end - start
+        random_positions = np.empty(
+            (batch_size, n),
+            dtype=np.int64
+        )
 
-        random_positions = rng.choice(big_N, size=(batch_size,n), replace=False)
+        for i in range(batch_size):
+            random_positions[i] = rng.choice(
+                big_N,
+                size=n,
+                replace=False
+            )
         random_positions.sort(axis=1)
 
-        permutation_statistics[start:end] = ks_from_positions(random_positions)
+        j = np.arange(n)
+        selected_before = np.broadcast_to(
+            j,
+            (batch_size, n)
+        )
+
+        complement_before = random_positions - selected_before
+        d_before = (selected_before / n) - (complement_before / m)
+        d_after = ((selected_before + 1) / n) - (complement_before / m)
+
+        permutation_statistics[start:end] = np.maximum(
+            np.max(np.abs(d_before), axis=1),
+            np.max(np.abs(d_after), axis=1)
+        )
+
         start = end
-    p_value = (1 + np.sum(permutation_statistics >= observed_ks_stat)) / (n_permutations + 1)
-    return observed_ks_stat, p_value
+    exceedances = np.count_nonzero(permutation_statistics >= observed_ks_stat)
+    p_value = (1 + exceedances) / (n_permutations + 1)
+    return observed_ks_stat, p_value, subset
 
 def profit_analysis_by_one_category(df, ctype):
     data = df[[ctype, 'profit_per_order']]
     category_types = data[ctype].unique()
 
     for category_type in category_types:
-        category_mask = data[ctype].eq(category_type)
-        category_values = data.loc[category_mask, 'profit_per_order'].to_numpy()
-        compliment = data.loc[~category_mask, 'profit_per_order'].to_numpy()
+        category_mask = data[ctype].eq(category_type).to_numpy()
 
         try:
-            _, p_value = fast_subset_vs_compliment_ks_test(
-                data,
-                category_values,
-                compliment,
-                np.flatnonzero(category_mask)
+            _, p_value, category_values = fast_subset_vs_compliment_ks_test(
+                df,
+                category_mask
             )
         except ValueError:
             continue
@@ -131,8 +197,12 @@ def profit_analysis_by_one_category(df, ctype):
         sample_std = np.std(category_values)
         sample_size = len(category_values)
 
-        print(f"Significant ({p_value}):", category_type, f"(mean: {str(sample_avg)[0:5]}, std: {str(sample_std)[0:5]})")
-        [ucl, lcl] = [sample_avg - 2*sample_std, sample_avg + 2*sample_std]
+        print(
+            f"Significant ({p_value}):",
+            category_type,
+            f"(mean: {str(sample_avg)[0:5]}, std: {str(sample_std)[0:5]})"
+        )
+        [lcl, ucl] = [sample_avg - 2*sample_std, sample_avg + 2*sample_std]
         order_index_arr = range(sample_size)
         plt.plot(order_index_arr, category_values)
         plt.plot(order_index_arr, [global_ucl]*sample_size, color='r', linestyle='dashed', linewidth=1)
@@ -168,7 +238,7 @@ def profit_analysis_by_n_categories(df, ctypes):
         sample_std = np.std(profit_per_order)
         print(f"Significant ({p_value}):", str(category_types), f"(mean: {str(sample_avg)[0:5]}, std: {str(sample_std)[0:5]})")
 
-        [ucl, lcl] = [sample_avg - 2*sample_std, sample_avg + 2*sample_std]
+        [lcl, ucl] = [sample_avg - 2*sample_std, sample_avg + 2*sample_std]
         order_index_arr = range(sample_size)
         plt.plot(order_index_arr, profit_per_order)
         plt.plot(order_index_arr, [global_ucl]*sample_size, color='r', linestyle='dashed', linewidth=1)
