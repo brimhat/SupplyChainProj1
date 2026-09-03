@@ -12,6 +12,20 @@ global_sample_avg = np.mean(global_profit_per_order)
 global_sample_std = np.std(global_profit_per_order)
 [global_ucl, global_lcl] = [global_sample_avg - 2*global_sample_std, global_sample_avg + 2*global_sample_std]
 
+department_name_colors = {
+    "Footwear": "red",
+    "Fan Shop": "yellow",
+    "Apparel": "black",
+    "Golf": "orange",
+    "Outdoors": "pink",
+    "Book Shop": "green",
+    "Technology": "gray",
+    "Health and Beauty": "turquoise",
+    "Discs Shop": "violet",
+    "Fitness": "magenta",
+    "Pet Shop": "maroon",
+}
+
 def broad_profit_analysis(df):
     [profit_per_order, ucl, lcl] = [global_profit_per_order, global_ucl, global_lcl]
     order_number = range(0,len(df))
@@ -204,7 +218,35 @@ def profit_analysis_by_one_category(df, ctype):
         )
         [lcl, ucl] = [sample_avg - 2*sample_std, sample_avg + 2*sample_std]
         order_index_arr = range(sample_size)
+
         plt.plot(order_index_arr, category_values)
+
+        if sample_size < 1000:
+            order_departments = (
+                df.loc[df[ctype] == category_type, "department_name"]
+                .str.strip()
+                .to_numpy()
+            )
+            point_colors = [
+                department_name_colors[department]
+                for department in order_departments
+            ]
+            plt.scatter(
+                order_index_arr,
+                category_values,
+                c=point_colors,
+                linewidths=0
+            )
+
+        if sample_size >= 20:
+            time_series = np.empty(sample_size, dtype=np.float64)
+            time_series[order_index_arr] = category_values
+            transition_matrix = generate_profit_transition_matrix(time_series)
+            print("========================================")
+            for row in transition_matrix:
+                print(row)
+            print()
+
         plt.plot(order_index_arr, [global_ucl]*sample_size, color='r', linestyle='dashed', linewidth=1)
         plt.plot(order_index_arr, [global_lcl]*sample_size, color='r', linestyle='dashed', linewidth=1)
         plt.plot(order_index_arr, [ucl]*sample_size, color='y', linestyle='dashed', linewidth=1)
@@ -266,12 +308,12 @@ def generate_profit_transition_matrix(time_series):
     fst_neg_std = global_sample_avg - 1*global_sample_std
     snd_neg_std = global_sample_avg - 2*global_sample_std
     stds_arr = [
-        (snd_pos_std, 99999999999),
+        (snd_pos_std, np.float64(99999999999)),
         (fst_pos_std, snd_pos_std),
         (global_sample_avg, fst_pos_std),
         (fst_neg_std, global_sample_avg),
         (snd_neg_std, fst_neg_std),
-        (-99999999999, snd_neg_std),
+        (np.float64(-99999999999), snd_neg_std),
     ]
     transition_dict = {}
     for current_range in stds_arr:
@@ -287,17 +329,27 @@ def generate_profit_transition_matrix(time_series):
                 item_handled = True
                 transition_dict[(current_range, next_range)] += 1
         if not item_handled:
-            raise KeyError(f"Items not within any range of transition dict: ({time_series[n]}, {time_series[n+1]})")
+            raise RuntimeError(f"Items not within any range of transition dict: ({time_series[n]}, {time_series[n+1]})")
 
-    transition_matrix = []
+    transition_matrix = np.zeros((6,6))
     transition_step_nums = transition_dict.values()
+    enabled_rows = np.arange(6)
+    row_idx = 0
     for n in range(0, len(transition_step_nums), 6):
-        transition_step_slice = np.array(list(transition_step_nums)[n:n+6])
+        transition_step_slice = np.array(list(transition_step_nums)[n:n+6])[enabled_rows]
         row_sum = transition_step_slice.sum()
+        if row_sum == 0:
+            transition_matrix = np.delete(transition_matrix, row_idx, axis=1)
+            transition_matrix = np.delete(transition_matrix, row_idx, axis=0)
+            enabled_rows = np.delete(enabled_rows, row_idx)
+            continue
         transition_matrix_row = transition_step_slice/row_sum
-        if np.round(transition_matrix_row.sum(), 7) != 1:
-            raise Exception(f"Transition matrix row sum does not equal 1: {transition_matrix_row}.sum() == {transition_matrix_row.sum()}")
-        transition_matrix.append(transition_matrix_row)
+        if not np.isclose(transition_matrix_row.sum(), 1):
+            raise RuntimeError(
+                f"Transition matrix row sum does not equal 1: {transition_matrix_row}.sum() == {transition_matrix_row.sum()}"
+            )
+        transition_matrix[row_idx] = transition_matrix_row
+        row_idx += 1
     return transition_matrix
 
 print("sample avg:", global_sample_avg)
