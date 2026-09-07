@@ -27,13 +27,19 @@ department_name_colors = {
 }
 
 def broad_profit_analysis(df):
-    [profit_per_order, ucl, lcl] = [global_profit_per_order, global_ucl, global_lcl]
+    [ucl, lcl] = [global_ucl, global_lcl]
+    profit_per_order_arr = df["profit_per_order"].to_numpy()
     order_number = range(0,len(df))
 
-    plt.plot(order_number, profit_per_order)
+    sample_avg = np.mean(profit_per_order_arr)
+    sample_std = np.std(profit_per_order_arr)
+    print("sample avg:", sample_avg)
+    print("sample std:", sample_std)
+
+    plt.plot(order_number, profit_per_order_arr)
     plt.plot(order_number, [ucl]*len(df), color='r', linestyle='dashed')
     plt.plot(order_number, [lcl]*len(df), color='r', linestyle='dashed')
-    plt.xlabel("Order number")
+    plt.xlabel("Transaction number")
     plt.ylabel("Profit per order")
     plt.show()
 
@@ -193,6 +199,7 @@ def profit_analysis_by_one_category(df, ctype):
     data = df[[ctype, 'profit_per_order']]
     category_types = data[ctype].unique()
 
+    clean_data = []
     for category_type in category_types:
         category_mask = data[ctype].eq(category_type).to_numpy()
 
@@ -216,11 +223,29 @@ def profit_analysis_by_one_category(df, ctype):
             category_type,
             f"(mean: {str(sample_avg)[0:5]}, std: {str(sample_std)[0:5]})"
         )
+
+        clean_data_row = {
+            "category": [category_type],
+            "num transactions": [sample_size],
+            "profit_per_order avg": [sample_avg],
+            "profit_per_order std": [sample_std],
+            "p-value": [p_value],
+            "stationary state": ['N/A'],
+            "risk to reward": ['N/A']
+        }
+        clean_data.append(clean_data_row)
+
         [lcl, ucl] = [sample_avg - 2*sample_std, sample_avg + 2*sample_std]
         order_index_arr = range(sample_size)
 
+        if sample_size < 20:
+            continue
+
+        #plt.figure()
+        #plt.subplot(121)
         plt.plot(order_index_arr, category_values)
 
+        '''
         if sample_size < 1000:
             order_departments = (
                 df.loc[df[ctype] == category_type, "department_name"]
@@ -237,24 +262,46 @@ def profit_analysis_by_one_category(df, ctype):
                 c=point_colors,
                 linewidths=0
             )
-
-        if sample_size >= 20:
-            time_series = np.empty(sample_size, dtype=np.float64)
-            time_series[order_index_arr] = category_values
-            transition_matrix = generate_profit_transition_matrix(time_series)
-            print("========================================")
-            for row in transition_matrix:
-                print(row)
-            print()
+        '''
 
         plt.plot(order_index_arr, [global_ucl]*sample_size, color='r', linestyle='dashed', linewidth=1)
         plt.plot(order_index_arr, [global_lcl]*sample_size, color='r', linestyle='dashed', linewidth=1)
         plt.plot(order_index_arr, [ucl]*sample_size, color='y', linestyle='dashed', linewidth=1)
         plt.plot(order_index_arr, [lcl]*sample_size, color='y', linestyle='dashed', linewidth=1)
-        plt.xlabel("Order number")
+        plt.xlabel("Transaction number")
         plt.ylabel("Profit per order")
-        plt.title("Profit Per Order for " + category_type)
+        plt.title("Control Chart for " + category_type)
+
+        time_series = np.empty(sample_size, dtype=np.float64)
+        time_series[order_index_arr] = category_values
+        transition_matrix, enabled_rows_mask = generate_profit_transition_matrix(time_series)
+        '''print("========================================")
+        for row in transition_matrix:
+            print(row)
+        print("----------------------------------------")
+        for row in enabled_rows_mask:
+            print(row)'''
+        stationary_state = np.empty(6)
+        stationary_state[enabled_rows_mask] = generate_stationary_state_from_transition_matrix(transition_matrix)
+        stationary_state[~enabled_rows_mask] = 0
+        '''print("stationary state:")
+        for row in stationary_state:
+            print(row)
+        print()'''
+        clean_data_row["stationary state"] = [stationary_state]
+        clean_data_row["risk to reward"] = [np.sum(stationary_state * np.array([3,2,1,-1,-2,-3]))]
+
+        '''plt.subplot(122)
+        n_bins = np.floor(np.maximum(10, sample_size/50))
+        plt.hist(category_values, bins=int(n_bins))
+        plt.xlim(np.floor(sample_avg - 3*sample_std), np.ceil(sample_avg + 3*sample_std))
+        plt.axvline(global_sample_avg, color='r', linestyle='dashed', linewidth=1)
+        plt.axvline(sample_avg, color='y', linestyle='dashed', linewidth=1)
+        _, max_ylim = plt.ylim()
+        plt.text(sample_avg * 1.1, max_ylim * 0.9, 'Mean: {:.2f}'.format(sample_avg))
+        plt.title("Histogram for " + category_type)'''
         plt.show()
+    return pd.DataFrame(clean_data)
 
 def profit_analysis_by_n_categories(df, ctypes):
     data_dict = {}
@@ -335,6 +382,7 @@ def generate_profit_transition_matrix(time_series):
     transition_step_nums = transition_dict.values()
     enabled_rows = np.arange(6)
     row_idx = 0
+    rows_enabled_mask = np.array([True]*6)
     for n in range(0, len(transition_step_nums), 6):
         transition_step_slice = np.array(list(transition_step_nums)[n:n+6])[enabled_rows]
         row_sum = transition_step_slice.sum()
@@ -342,6 +390,7 @@ def generate_profit_transition_matrix(time_series):
             transition_matrix = np.delete(transition_matrix, row_idx, axis=1)
             transition_matrix = np.delete(transition_matrix, row_idx, axis=0)
             enabled_rows = np.delete(enabled_rows, row_idx)
+            rows_enabled_mask[int(np.floor( (n+1) / 6 ))] = False
             continue
         transition_matrix_row = transition_step_slice/row_sum
         if not np.isclose(transition_matrix_row.sum(), 1):
@@ -350,13 +399,36 @@ def generate_profit_transition_matrix(time_series):
             )
         transition_matrix[row_idx] = transition_matrix_row
         row_idx += 1
-    return transition_matrix
+    return transition_matrix, rows_enabled_mask
 
-print("sample avg:", global_sample_avg)
-print("sample std:", global_sample_std)
-profit_analysis_by_one_category(data_frame, "customer_city")
-#numerical_distribution()
-#profit_analysis_by_n_categories(data_frame, ["customer_city", "order_city"])
-#profit_analysis_by_n_categories(data_frame, ["customer_city"])
-#generate_profit_transition_matrix(global_profit_per_order)
-#broad_profit_analysis(data_frame)
+def generate_stationary_state_from_transition_matrix(transition_matrix):
+    eigenvalues, eigenvectors = np.linalg.eig(transition_matrix.T)
+
+    stationary_state = eigenvectors[:, np.isclose(eigenvalues, 1.0)]
+    stationary_state = stationary_state[:, 0].real
+    stationary_state = stationary_state / stationary_state.sum()
+
+    if not np.isclose(stationary_state.sum(), 1):
+        raise RuntimeError(f"Stationary state sum does not equal 1: {stationary_state}.sum() == {stationary_state.sum()}")
+
+    return stationary_state
+
+def primitive_data_science_solution(df, significant_categories, ctype):
+    negative_significance = significant_categories[ significant_categories["profit_per_order avg"] < global_sample_avg ]
+    negative_significance_category_names = np.array(negative_significance["category"].tolist()).flatten()
+    clean_data_frame = df[ ~df[ctype].isin(negative_significance_category_names) ]
+    return clean_data_frame
+
+broad_profit_analysis(data_frame)
+global_transition_matrix, _ = generate_profit_transition_matrix(global_profit_per_order)
+global_stationary_state = generate_stationary_state_from_transition_matrix(global_transition_matrix)
+for row in global_stationary_state:
+    print(row)
+clean_data = profit_analysis_by_one_category(data_frame, "customer_city")
+new_data_frame = primitive_data_science_solution(data_frame, clean_data, "customer_city")
+broad_profit_analysis(new_data_frame)
+new_global_transition_matrix, _ = generate_profit_transition_matrix(np.array(new_data_frame["profit_per_order"].tolist()))
+new_global_stationary_state = generate_stationary_state_from_transition_matrix(new_global_transition_matrix)
+for row in new_global_stationary_state:
+    print(row)
+clean_data.to_excel("significant_cities.xlsx")
