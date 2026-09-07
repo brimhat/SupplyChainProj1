@@ -26,7 +26,7 @@ department_name_colors = {
     "Pet Shop": "maroon",
 }
 
-def broad_profit_analysis(df):
+def broad_profit_analysis(df, save_path):
     [ucl, lcl] = [global_ucl, global_lcl]
     profit_per_order_arr = df["profit_per_order"].to_numpy()
     order_number = range(0,len(df))
@@ -41,7 +41,8 @@ def broad_profit_analysis(df):
     plt.plot(order_number, [lcl]*len(df), color='r', linestyle='dashed')
     plt.xlabel("Transaction number")
     plt.ylabel("Profit per order")
-    plt.show()
+    plt.savefig(save_path)
+    plt.close()
 
 def subset_vs_compliment_ks_test(subset, compliment, n_permutations=1_000):
     if len(subset) < 2:
@@ -199,7 +200,17 @@ def profit_analysis_by_one_category(df, ctype):
     data = df[[ctype, 'profit_per_order']]
     category_types = data[ctype].unique()
 
-    clean_data = []
+    # switch to dict and then append by key
+    clean_data = {
+        "category": [],
+        "num transactions": [],
+        "profit_per_order avg": [],
+        "profit_per_order std": [],
+        "p-value": [],
+        "stationary state": [],
+        "risk to reward": []
+    }
+    clean_data_row_idx = 0
     for category_type in category_types:
         category_mask = data[ctype].eq(category_type).to_numpy()
 
@@ -224,16 +235,14 @@ def profit_analysis_by_one_category(df, ctype):
             f"(mean: {str(sample_avg)[0:5]}, std: {str(sample_std)[0:5]})"
         )
 
-        clean_data_row = {
-            "category": [category_type],
-            "num transactions": [sample_size],
-            "profit_per_order avg": [sample_avg],
-            "profit_per_order std": [sample_std],
-            "p-value": [p_value],
-            "stationary state": ['N/A'],
-            "risk to reward": ['N/A']
-        }
-        clean_data.append(clean_data_row)
+        clean_data["category"].append(category_type)
+        clean_data["num transactions"].append(sample_size)
+        clean_data["profit_per_order avg"].append(sample_avg)
+        clean_data["profit_per_order std"].append(sample_std)
+        clean_data["p-value"].append(p_value)
+        clean_data["stationary state"].append('N/A')
+        clean_data["risk to reward"].append('N/A')
+        clean_data_row_idx += 1
 
         [lcl, ucl] = [sample_avg - 2*sample_std, sample_avg + 2*sample_std]
         order_index_arr = range(sample_size)
@@ -288,8 +297,8 @@ def profit_analysis_by_one_category(df, ctype):
         for row in stationary_state:
             print(row)
         print()'''
-        clean_data_row["stationary state"] = [stationary_state]
-        clean_data_row["risk to reward"] = [np.sum(stationary_state * np.array([3,2,1,-1,-2,-3]))]
+        clean_data["stationary state"][clean_data_row_idx-1] = stationary_state
+        clean_data["risk to reward"][clean_data_row_idx-1] = np.sum(stationary_state * np.array([3,2,1,-1,-2,-3]))
 
         '''plt.subplot(122)
         n_bins = np.floor(np.maximum(10, sample_size/50))
@@ -300,7 +309,8 @@ def profit_analysis_by_one_category(df, ctype):
         _, max_ylim = plt.ylim()
         plt.text(sample_avg * 1.1, max_ylim * 0.9, 'Mean: {:.2f}'.format(sample_avg))
         plt.title("Histogram for " + category_type)'''
-        plt.show()
+        plt.savefig(f"media/control_chart_for_{"_".join(category_type.split())}.jpg")
+        plt.close()
     return pd.DataFrame(clean_data)
 
 def profit_analysis_by_n_categories(df, ctypes):
@@ -419,16 +429,16 @@ def primitive_data_science_solution(df, significant_categories, ctype):
     clean_data_frame = df[ ~df[ctype].isin(negative_significance_category_names) ]
     return clean_data_frame
 
-broad_profit_analysis(data_frame)
+broad_profit_analysis(data_frame, "media/old_control_chart.jpg")
 global_transition_matrix, _ = generate_profit_transition_matrix(global_profit_per_order)
 global_stationary_state = generate_stationary_state_from_transition_matrix(global_transition_matrix)
 for row in global_stationary_state:
     print(row)
 clean_data = profit_analysis_by_one_category(data_frame, "customer_city")
 new_data_frame = primitive_data_science_solution(data_frame, clean_data, "customer_city")
-broad_profit_analysis(new_data_frame)
+broad_profit_analysis(new_data_frame, "media/new_control_chart.jpg")
 new_global_transition_matrix, _ = generate_profit_transition_matrix(np.array(new_data_frame["profit_per_order"].tolist()))
 new_global_stationary_state = generate_stationary_state_from_transition_matrix(new_global_transition_matrix)
 for row in new_global_stationary_state:
     print(row)
-clean_data.to_excel("significant_cities.xlsx")
+clean_data.to_csv("media/significant_cities.csv")
