@@ -10,7 +10,7 @@ data_frame = pd.read_csv(csv_path)
 global_profit_per_order = np.array(data_frame["profit_per_order"].tolist())
 global_sample_avg = np.mean(global_profit_per_order)
 global_sample_std = np.std(global_profit_per_order)
-[global_ucl, global_lcl] = [global_sample_avg - 2*global_sample_std, global_sample_avg + 2*global_sample_std]
+[global_lcl, global_ucl] = [global_sample_avg - 2*global_sample_std, global_sample_avg + 2*global_sample_std]
 
 department_name_colors = {
     "Footwear": "red",
@@ -196,7 +196,7 @@ def fast_subset_vs_compliment_ks_test(df, category_mask, n_permutations=100_000,
     p_value = (1 + exceedances) / (n_permutations + 1)
     return observed_ks_stat, p_value, subset
 
-def profit_analysis_by_one_category(df, ctype):
+def profit_analysis_by_one_category(df, ctype, output='show'):
     data = df[[ctype, 'profit_per_order']]
     category_types = data[ctype].unique()
 
@@ -299,6 +299,9 @@ def profit_analysis_by_one_category(df, ctype):
         print()'''
         clean_data["stationary state"][clean_data_row_idx-1] = stationary_state
         clean_data["risk to reward"][clean_data_row_idx-1] = np.sum(stationary_state * np.array([3,2,1,-1,-2,-3]))
+        for row in stationary_state:
+            print(row)
+        print()
 
         '''plt.subplot(122)
         n_bins = np.floor(np.maximum(10, sample_size/50))
@@ -309,7 +312,12 @@ def profit_analysis_by_one_category(df, ctype):
         _, max_ylim = plt.ylim()
         plt.text(sample_avg * 1.1, max_ylim * 0.9, 'Mean: {:.2f}'.format(sample_avg))
         plt.title("Histogram for " + category_type)'''
-        plt.savefig(f"media/control_chart_for_{"_".join(category_type.split())}.jpg")
+        if output.strip().lower() == 'save':
+            plt.savefig(f"media/control_chart_for_{"_".join(category_type.split())}.jpg")
+        elif output.strip().lower() == 'show':
+            plt.show()
+        else:
+            raise ValueError(f"Output parameter {output.strip().lower()} not supported. Please choose 'save' or 'show'")
         plt.close()
     return pd.DataFrame(clean_data)
 
@@ -429,6 +437,27 @@ def primitive_data_science_solution(df, significant_categories, ctype):
     clean_data_frame = df[ ~df[ctype].isin(negative_significance_category_names) ]
     return clean_data_frame
 
+def explore_extreme_values_wrt_department(df, lcl, ucl):
+    negative_extreme_rows = df[ df["profit_per_order"] < lcl ]
+    positive_extreme_rows = df[ df["profit_per_order"] > ucl ]
+    for extreme_rows in (negative_extreme_rows, positive_extreme_rows):
+        order_departments = (
+            extreme_rows["department_name"]
+            .str.strip()
+        )
+        order_departments_arr = order_departments.to_numpy()
+        dept_colors = [
+            department_name_colors[department]
+            for department in order_departments_arr
+        ]
+        dept_num_occurrences_arr = []
+        for department in department_name_colors.keys():
+            rows_of_specific_dept = order_departments[ order_departments_arr == department ].to_numpy()
+            dept_num_occurrences_arr.append(len(rows_of_specific_dept))
+        dept_name_keys = ( dept[:4] for dept in department_name_colors.keys() )
+        plt.bar(list(dept_name_keys), dept_num_occurrences_arr, color=dept_colors)
+        plt.show()
+'''
 broad_profit_analysis(data_frame, "media/old_control_chart.jpg")
 global_transition_matrix, _ = generate_profit_transition_matrix(global_profit_per_order)
 global_stationary_state = generate_stationary_state_from_transition_matrix(global_transition_matrix)
@@ -442,3 +471,6 @@ new_global_stationary_state = generate_stationary_state_from_transition_matrix(n
 for row in new_global_stationary_state:
     print(row)
 clean_data.to_csv("media/significant_cities.csv")
+'''
+explore_extreme_values_wrt_department(data_frame, global_lcl, global_ucl)
+explore_extreme_values_wrt_department(data_frame[ data_frame["customer_city"] == 'Caguas' ], global_lcl, global_ucl)
