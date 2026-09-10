@@ -26,7 +26,7 @@ department_name_colors = {
     "Pet Shop": "maroon",
 }
 
-def broad_profit_analysis(df, save_path):
+def broad_profit_analysis(df, save_path=""):
     [ucl, lcl] = [global_ucl, global_lcl]
     profit_per_order_arr = df["profit_per_order"].to_numpy()
     order_number = range(0,len(df))
@@ -41,7 +41,10 @@ def broad_profit_analysis(df, save_path):
     plt.plot(order_number, [lcl]*len(df), color='r', linestyle='dashed')
     plt.xlabel("Transaction number")
     plt.ylabel("Profit per order")
-    plt.savefig(save_path)
+    if save_path == "":
+        plt.show()
+    else:
+        plt.savefig(save_path)
     plt.close()
 
 def subset_vs_compliment_ks_test(subset, compliment, n_permutations=1_000):
@@ -435,12 +438,12 @@ def primitive_data_science_solution(df, significant_categories, ctype):
     negative_significance = significant_categories[ significant_categories["profit_per_order avg"] < global_sample_avg ]
     negative_significance_category_names = np.array(negative_significance["category"].tolist()).flatten()
     clean_data_frame = df[ ~df[ctype].isin(negative_significance_category_names) ]
-    return clean_data_frame
+    return clean_data_frame, negative_significance_category_names
 
 def explore_extreme_values_wrt_department(df, lcl, ucl):
     negative_extreme_rows = df[ df["profit_per_order"] < lcl ]
     positive_extreme_rows = df[ df["profit_per_order"] > ucl ]
-    for extreme_rows in (negative_extreme_rows, positive_extreme_rows):
+    for extreme_rows, name in [(negative_extreme_rows, "Lower"), (positive_extreme_rows, "Upper")]:
         order_departments = (
             extreme_rows["department_name"]
             .str.strip()
@@ -456,21 +459,55 @@ def explore_extreme_values_wrt_department(df, lcl, ucl):
             dept_num_occurrences_arr.append(len(rows_of_specific_dept))
         dept_name_keys = ( dept[:4] for dept in department_name_colors.keys() )
         plt.bar(list(dept_name_keys), dept_num_occurrences_arr, color=dept_colors)
+        plt.title(f"Department Transactions Breaking the {name} Control Limit")
         plt.show()
-'''
-broad_profit_analysis(data_frame, "media/old_control_chart.jpg")
+        plt.close()
+        print(f"NUM {name.upper()} EXTREME VALUES:", len(order_departments_arr))
+
+def calculate_risk(stationary_state):
+    if stationary_state[0] == 'N/A' and len(stationary_state) == 1:
+        return stationary_state
+    else:
+        try:
+            return np.sum(stationary_state * [3,2,1,-1,-2,-3])
+        except ValueError:
+            raise RuntimeError(f"{stationary_state} is not a valid stationary state.")
+
+broad_profit_analysis(data_frame)
 global_transition_matrix, _ = generate_profit_transition_matrix(global_profit_per_order)
 global_stationary_state = generate_stationary_state_from_transition_matrix(global_transition_matrix)
 for row in global_stationary_state:
     print(row)
-clean_data = profit_analysis_by_one_category(data_frame, "customer_city")
-new_data_frame = primitive_data_science_solution(data_frame, clean_data, "customer_city")
-broad_profit_analysis(new_data_frame, "media/new_control_chart.jpg")
+print("REWARD-TO-RISK:", calculate_risk(global_stationary_state))
+#clean_data = profit_analysis_by_one_category(data_frame, "customer_city")
+clean_data = pd.read_csv("media/significant_cities.csv")
+new_data_frame, negative_significant_cities = primitive_data_science_solution(data_frame, clean_data, "customer_city")
+broad_profit_analysis(new_data_frame)
 new_global_transition_matrix, _ = generate_profit_transition_matrix(np.array(new_data_frame["profit_per_order"].tolist()))
 new_global_stationary_state = generate_stationary_state_from_transition_matrix(new_global_transition_matrix)
 for row in new_global_stationary_state:
     print(row)
-clean_data.to_csv("media/significant_cities.csv")
-'''
+print("REWARD-TO-RISK:", calculate_risk(new_global_stationary_state))
+
 explore_extreme_values_wrt_department(data_frame, global_lcl, global_ucl)
-explore_extreme_values_wrt_department(data_frame[ data_frame["customer_city"] == 'Caguas' ], global_lcl, global_ucl)
+
+city_dfs = [new_data_frame]
+clean_city_data_arr = []
+for city in negative_significant_cities:
+    print(f"\n========================{city.upper()}========================")
+    city_df = data_frame[ data_frame["customer_city"] == city ]
+    clean_city_data = profit_analysis_by_one_category(city_df, "department_name")
+    new_city_df, _ = primitive_data_science_solution(city_df, clean_city_data, "department_name")
+    city_dfs.append(new_city_df)
+    clean_city_data["customer_city"] = [city] * len(clean_city_data)
+    clean_city_data_arr.append(clean_city_data)
+clean_city_data = pd.concat(clean_city_data_arr, ignore_index=True)
+clean_city_data.to_csv("media/signficant_cities_and_dept_name.csv")
+last_data_frame = pd.concat(city_dfs, ignore_index=True)
+broad_profit_analysis(last_data_frame, "media/last_control_chart.jpg")
+last_transition_matrix, _ = generate_profit_transition_matrix(np.array(last_data_frame["profit_per_order"].tolist()))
+last_stationary_state = generate_stationary_state_from_transition_matrix(last_transition_matrix)
+for row in last_stationary_state:
+    print(row)
+print("REWARD-TO-RISK:", calculate_risk(last_stationary_state))
+explore_extreme_values_wrt_department(last_data_frame, global_lcl, global_ucl)
