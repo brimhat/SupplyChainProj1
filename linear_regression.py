@@ -11,10 +11,18 @@ c_df = data_frame[ data_frame['customer_city'] == 'Caguas' ]
 c_df["shipping_date"] = pd.to_datetime(c_df["shipping_date"], format="%Y-%m-%d %H:%M:%S%z", utc=True)
 c_df.set_index('shipping_date', inplace=True)
 c_df.sort_index(inplace=True)
-c_df["profit_per_order_delta_lag_1"] = c_df.profit_per_order.diff().shift(-1)
+c_df["profit_per_order_delta_lag_1"] = c_df.profit_per_order.diff()
 
 dept_name_arr = ['Fitness', 'Golf', 'Fan Shop', 'Apparel', 'Footwear', 'Outdoors', 'Technology', 'Pet Shop', 'Book Shop', 'Discs Shop', 'Health and Beauty ']
 market_arr = ['LATAM', 'Pacific Asia', 'Europe', 'Africa', 'USCA']
+
+ppo_delta_by_dept_col = pd.DataFrame()
+for dept in market_arr:
+    dept_rows = c_df[c_df["market"] == dept]
+    dept_rows["profit_per_order_delta_lag_dept"] = dept_rows.profit_per_order.diff()
+    ppo_delta_by_dept_col = pd.concat([ppo_delta_by_dept_col, dept_rows["profit_per_order_delta_lag_dept"]])
+ppo_delta_by_dept_col.sort_index(inplace=True)
+c_df["profit_per_order_delta_lag_dept"] = ppo_delta_by_dept_col
 
 def graph_time_series(df: pd.DataFrame, dependent_var: str, freq: str, kind:str="line", start=None) -> None:
     time_series = df[dependent_var].resample(freq).mean()
@@ -77,4 +85,10 @@ def categorical_data_before_and_after(df: pd.DataFrame, tbreak: str) -> None:
         plt.close()
 
 graph_time_series(c_df, "profit_per_order_delta_lag_1", "ME")
-categorical_data_before_and_after(c_df, '2018-01-01')
+graph_time_series(c_df, "profit_per_order_delta_lag_dept", "ME")
+#categorical_data_before_and_after(c_df, '2018-01-01')
+
+temp = c_df[ c_df.index >= '2018-02-01' ]
+temp = temp[ temp.index <= '2018-04-01' ]
+for row in temp[['profit_per_order_delta_lag_dept','department_name','customer_country','order_country']].itertuples():
+    print(row)
