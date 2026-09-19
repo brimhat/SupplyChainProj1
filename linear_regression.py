@@ -120,6 +120,52 @@ def df_ks_2samp_test_before_vs_after(df:pd.DataFrame, dependent_var:str, tbreak:
         after_arr = after.dropna().tolist()
     return ks_2samp(before_arr, after_arr)
 
+# Handles ties
+def df_ks_2samp_permutation(
+    df: pd.DataFrame,
+    dependent_var: str,
+    tbreak: str,
+    freq: str | None = None,
+    n_resamples: int = 10_000,
+    seed: int | None = None,
+):
+    try:
+        datetime.strptime(tbreak, "%Y-%m-%d")
+    except ValueError:
+        raise ValueError(f"tbreak must be in YYYY-MM-DD format: {tbreak}")
+
+    before = df[df.index < tbreak][dependent_var]
+    after = df[df.index >= tbreak][dependent_var]
+
+    if freq is not None:
+        before = before.resample(freq).mean()
+        after = after.resample(freq).mean()
+    before = before.dropna().to_numpy()
+    after = after.dropna().to_numpy()
+
+    if before.size == 0 or after.size == 0:
+        raise ValueError("Both periods must contain observations")
+
+    observed = ks_2samp(before, after).statistic
+
+    pooled = np.concatenate([before, after])
+    n_before = before.size
+    rng = np.random.default_rng(seed)
+
+    exceedances = 0
+    for _ in range(n_resamples):
+        permuted = rng.permutation(pooled)
+        simulated = ks_2samp(
+            permuted[:n_before],
+            permuted[n_before:]
+        ).statistic
+        exceedances += simulated >= observed
+
+    # The +1 correction prevents a Monte Carlo p-value of zero.
+    p_value = (exceedances + 1) / (n_resamples + 1)
+
+    return observed, p_value
+
 graph_time_series(c_df, "profit_per_order_delta_lag_1", "ME")
 graph_time_series(c_df, "profit_per_order_delta_lag_dept", "ME")
 #categorical_data_before_and_after(c_df, '2018-01-01')
@@ -132,5 +178,7 @@ c_df_post_2017 = c_df[ c_df.index >= '2018-01-01' ].dropna()
 #generate_histogram_from_df(c_df_post_2017, "profit_per_order_delta_lag_1", freq='D', xlim=(-400,400))
 print(len(c_df_pre_2018))
 print(len(c_df_post_2017))
-stat, p = df_ks_2samp_test_before_vs_after(c_df, "profit_per_order_delta_lag_1", '2018-01-01')
-print("p_val =", p)
+_, p = df_ks_2samp_test_before_vs_after(c_df, "profit_per_order_delta_lag_1", '2018-01-01')
+print("old p_val =", p)
+_, p = df_ks_2samp_permutation(c_df, "profit_per_order_delta_lag_1", '2018-01-01')
+print("new p_val =", p)
