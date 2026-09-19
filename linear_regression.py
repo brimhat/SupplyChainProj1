@@ -3,6 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from kaggle_install import path
 from datetime import datetime
+from scipy.stats import ks_2samp
 
 csv_path = path + f"\\incom2024_delay_example_dataset.csv"
 data_frame = pd.read_csv(csv_path)
@@ -49,12 +50,12 @@ def categorical_data_before_and_after(df: pd.DataFrame, tbreak: str) -> None:
     after = df[ df.index >= tbreak ]
     before_dict = {}
     after_dict = {}
-    for dept in dept_name_arr:
-        before_dict[dept] = len(before[ before["department_name"] == dept ])
-        after_dict[dept] = len(after[ after["department_name"] == dept ])
-    for market in market_arr:
-        before_dict[market] = len(before[ before["market"] == market ])
-        after_dict[market] = len(after[ after["market"] == market ])
+    for d in dept_name_arr:
+        before_dict[d] = len(before[ before["department_name"] == d ])
+        after_dict[d] = len(after[ after["department_name"] == d ])
+    for m in market_arr:
+        before_dict[m] = len(before[ before["market"] == m ])
+        after_dict[m] = len(after[ after["market"] == m ])
     before_dept_arr = np.array(list(before_dict.values())[0:len(dept_name_arr)]) / len(before)
     before_market_arr = np.array(list(before_dict.values())[len(dept_name_arr):]) / len(before)
     after_dept_arr = np.array(list(after_dict.values())[0:len(dept_name_arr)]) / len(after)
@@ -77,18 +78,59 @@ def categorical_data_before_and_after(df: pd.DataFrame, tbreak: str) -> None:
         ax.set_ylabel("Sale Percentage")
         if len(bf) == len(dept_name_arr):
             ax.set_title("Department Sales Info Before vs After")
-            ax.set_xticklabels([ dept[0:3] for dept in dept_name_arr ])
+            ax.set_xticklabels([ d[0:3] for d in dept_name_arr ])
         else:
             ax.set_title("Market Sales Info Before vs After")
             ax.set_xticklabels(market_arr)
         plt.show()
         plt.close()
 
+def generate_histogram_from_df(df: pd.DataFrame, dependent_var: str, bins:int=50, freq=None, xlim=(-750,750)) -> None:
+    clean_df = df[dependent_var]
+    if freq is not None:
+        data = np.array(clean_df.resample(freq).mean().dropna().tolist())
+    else:
+        data = np.array(clean_df.dropna().tolist())
+    plt.hist(data, bins=bins)
+    plt.xlabel(f"Rounded {dependent_var}")
+    plt.ylabel("Frequency")
+    _, max_y = plt.ylim()
+    max_y_1 = max_y - max_y / 20
+    max_y_2 = max_y_1 - max_y_1 / 20
+    min_x, max_x = xlim
+    plt.xlim(min_x, max_x)
+    plt.text(min_x - min_x / 20, max_y_1, f"mean: {float(np.mean(data))}")
+    plt.text(min_x - min_x / 20, max_y_2, f"std: {float(np.std(data))}")
+    plt.show()
+    plt.close()
+
+def df_ks_2samp_test_before_vs_after(df:pd.DataFrame, dependent_var:str, tbreak:str, freq=None):
+    try:
+        datetime.strptime(tbreak, "%Y-%m-%d")
+    except ValueError:
+        raise ValueError(f"tbreak must be in YYYY-MM-DD format: {tbreak}")
+
+    before = df[ df.index < tbreak ][dependent_var]
+    after = df[ df.index >= tbreak ][dependent_var]
+    if freq is not None:
+        before_arr = before.resample(freq).mean().dropna().tolist()
+        after_arr = after.resample(freq).mean().dropna().tolist()
+    else:
+        before_arr = before.dropna().tolist()
+        after_arr = after.dropna().tolist()
+    return ks_2samp(before_arr, after_arr)
+
 graph_time_series(c_df, "profit_per_order_delta_lag_1", "ME")
 graph_time_series(c_df, "profit_per_order_delta_lag_dept", "ME")
 #categorical_data_before_and_after(c_df, '2018-01-01')
 
-temp = c_df[ c_df.index >= '2018-02-01' ]
-temp = temp[ temp.index <= '2018-04-01' ]
-for row in temp[['profit_per_order_delta_lag_dept','department_name','customer_country','order_country']].itertuples():
-    print(row)
+c_df_pre_2018 = c_df[ c_df.index <= '2018-01-01' ].dropna()
+c_df_post_2017 = c_df[ c_df.index >= '2018-01-01' ].dropna()
+#generate_histogram_from_df(c_df_pre_2018, "profit_per_order_delta_lag_1")
+#generate_histogram_from_df(c_df_pre_2018, "profit_per_order_delta_lag_1", freq='D')
+#generate_histogram_from_df(c_df_post_2017, "profit_per_order_delta_lag_1", xlim=(-400,400))
+#generate_histogram_from_df(c_df_post_2017, "profit_per_order_delta_lag_1", freq='D', xlim=(-400,400))
+print(len(c_df_pre_2018))
+print(len(c_df_post_2017))
+stat, p = df_ks_2samp_test_before_vs_after(c_df, "profit_per_order_delta_lag_1", '2018-01-01')
+print("p_val =", p)
