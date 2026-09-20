@@ -25,8 +25,11 @@ for dept in market_arr:
 ppo_delta_by_dept_col.sort_index(inplace=True)
 c_df["profit_per_order_delta_lag_dept"] = ppo_delta_by_dept_col
 
-def graph_time_series(df: pd.DataFrame, dependent_var: str, freq: str, kind:str="line", start=None) -> None:
-    time_series = df[dependent_var].resample(freq).mean()
+def graph_time_series(df:pd.DataFrame, dependent_var:str, freq:str|None=None, kind:str="line", start=None) -> None:
+    time_series = df[dependent_var]
+    if freq is not None:
+        time_series = df[dependent_var].resample(freq).mean()
+
     if start is not None:
         time_series = time_series[time_series.index >= start]
 
@@ -166,54 +169,80 @@ def df_ks_2samp_permutation(
 
     return observed, p_value
 
-def df_fetch_extreme_resample_rows(df:pd.DataFrame, dependent_var:str, freq:str|None) -> tuple[pd.DataFrame, pd.DataFrame]:
+def df_fetch_extreme_resample_indices(
+        df:pd.DataFrame,
+        dependent_var:str,
+        freq:str
+) -> tuple[list[tuple[pd.Timestamp, pd.Timestamp]], list[tuple[pd.Timestamp, pd.Timestamp]]]:
     if dependent_var not in df.columns:
         raise KeyError(f"Column {dependent_var!r} not found")
 
-    if freq is None:
-        values = df[dependent_var]
-        mean = values.mean()
-        std = values.std()
-        neg = df.loc[values <= mean-2*std]
-        pos = df.loc[values >= mean+2*std]
-        return neg, pos
+    if freq not in ['D', 'W', 'ME']:
+        raise ValueError(f"Frequency {freq!r} not supported")
 
-    if freq not in {"D", "ME"}:
-        raise ValueError(f"Unsupported freq: {freq!r}. Only 'D' and 'ME' are supported")
+    if not df[dependent_var].equals(df[dependent_var].resample(freq).mean()):
+        raise ValueError(f"Invalid frequency: {freq!r} -- DataFrame must be resampled before sending to function.")
 
-    values = df[dependent_var]
-
-    resampled_means = values.resample(freq).mean()
-    mean = resampled_means.mean()
-    std = resampled_means.std()
+    mean = df[dependent_var].mean()
+    std = df[dependent_var].std()
     lcl, ucl = mean-2*std, mean+2*std
 
-    row_period_means = values.resample(freq).transform("mean")
+    date_offset = {
+        'D': (1,0,0),
+        'W': (0,1,0),
+        'ME': (0,0,1)
+    }
+    d, w, m = date_offset[freq]
 
-    neg = df.loc[row_period_means <= lcl].copy()
-    pos = df.loc[row_period_means >= ucl].copy()
+    neg_df = df[ df[dependent_var] <= lcl ]
+    pos_df = df[ df[dependent_var] >= ucl ]
+    neg_df['end_date_exclusive'] = neg_df.index + pd.DateOffset(days=d, weeks=w, months=m)
+    pos_df['end_date_exclusive'] = pos_df.index + pd.DateOffset(days=d, weeks=w, months=m)
+    neg_dates = list(zip(neg_df.index.tolist(), neg_df['end_date_exclusive'].tolist()))
+    pos_dates = list(zip(pos_df.index.tolist(), pos_df['end_date_exclusive'].tolist()))
+    return neg_dates, pos_dates
 
-    return neg, pos
+def df_rows_from_timestamp_arr(df:pd.DataFrame, time_arr:list[tuple[pd.Timestamp, pd.Timestamp]]) -> pd.DataFrame:
+    if not df.index.is_monotonic_increasing:
+        raise ValueError("df.index must be sorted")
 
-graph_time_series(c_df, "profit_per_order_delta_lag_1", "D", kind='scatter')
+    pieces = []
+    for start, end in time_arr:
+        left = df.index.searchsorted(start, side="left")
+        right = df.index.searchsorted(end, side="left")
+        pieces.append(df.iloc[left:right])
+
+    return pd.concat(pieces) if pieces else df.iloc[0:0].copy()
+
+#graph_time_series(c_df, "profit_per_order_delta_lag_1", "D", kind='scatter')
 #graph_time_series(c_df, "profit_per_order_delta_lag_dept", "ME")
 #categorical_data_before_and_after(c_df, '2018-01-01')
 
-c_df_pre_2018 = c_df[ c_df.index <= '2018-01-01' ].dropna()
-c_df_post_2017 = c_df[ c_df.index >= '2018-01-01' ].dropna()
-generate_histogram_from_df(c_df_pre_2018, "profit_per_order_delta_lag_1")
+#c_df_pre_2018 = c_df[ c_df.index <= '2018-01-01' ].dropna()
+#c_df_post_2017 = c_df[ c_df.index >= '2018-01-01' ].dropna()
+#generate_histogram_from_df(c_df_pre_2018, "profit_per_order_delta_lag_1")
 #generate_histogram_from_df(c_df_pre_2018, "profit_per_order_delta_lag_1", freq='D')
-generate_histogram_from_df(c_df_post_2017, "profit_per_order_delta_lag_1", xlim=(-400,400))
+#generate_histogram_from_df(c_df_post_2017, "profit_per_order_delta_lag_1", xlim=(-400,400))
 #generate_histogram_from_df(c_df_post_2017, "profit_per_order_delta_lag_1", freq='D', xlim=(-400,400))
-print(len(c_df_pre_2018))
-print(len(c_df_post_2017))
-#_, p = df_ks_2samp_test_before_vs_after(c_df, "profit_per_order_delta_lag_1", '2018-01-01', freq='D')
-#print("old p_val =", p)
-#_, p = df_ks_2samp_permutation(c_df, "profit_per_order_delta_lag_1", '2018-01-01', freq='D')
-#print("new p_val =", p)
 
-neg_c_df, pos_c_df = df_fetch_extreme_resample_rows(c_df, dependent_var="profit_per_order_delta_lag_1", freq="D")
-print("EXTREME NEGATIVE VALUES:")
-print(neg_c_df[['department_name', 'order_country', 'profit_per_order_delta_lag_1']].to_markdown())
-print("\n\nEXTREME POSITIVE VALUES:")
-print(pos_c_df[['department_name', 'order_country', 'profit_per_order_delta_lag_1']].to_markdown())
+ppo_df = pd.DataFrame()
+ppo_df['profit_per_order'] = c_df.profit_per_order.resample('W').mean()
+ppo_df['delta_lag_1'] = ppo_df.profit_per_order.diff()
+
+graph_time_series(ppo_df, 'delta_lag_1', kind='line')
+generate_histogram_from_df(ppo_df, "delta_lag_1")
+
+(neg, pos) = df_fetch_extreme_resample_indices(ppo_df, "delta_lag_1", freq='W')
+print("NEGATIVE EXTREMES:")
+for row in neg:
+    print(row)
+print("\nPOSITIVE EXTREMES:")
+for row in pos:
+    print(row)
+
+neg_df = df_rows_from_timestamp_arr(c_df, neg)
+pos_df = df_rows_from_timestamp_arr(c_df, pos)
+print("\n\nNEGATIVE EXTREME ROWS:")
+print(neg_df[['department_name', 'market', 'profit_per_order']].to_markdown())
+print("\nPOSITIVE EXTREME ROWS:")
+print(pos_df[['department_name', 'market', 'profit_per_order']].to_markdown())
