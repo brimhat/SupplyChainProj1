@@ -1,9 +1,10 @@
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
 from kaggle_install import path
 from datetime import datetime
-from scipy.stats import ks_2samp
+from scipy.stats import ks_2samp, linregress
 
 csv_path = path + f"\\incom2024_delay_example_dataset.csv"
 data_frame = pd.read_csv(csv_path)
@@ -12,20 +13,19 @@ c_df = data_frame[ data_frame['customer_city'] == 'Caguas' ]
 c_df["shipping_date"] = pd.to_datetime(c_df["shipping_date"], format="%Y-%m-%d %H:%M:%S%z", utc=True)
 c_df.set_index('shipping_date', inplace=True)
 c_df.sort_index(inplace=True)
-c_df["profit_per_order_delta_lag_1"] = c_df.profit_per_order.diff()
 
 dept_name_arr = ['Fitness', 'Golf', 'Fan Shop', 'Apparel', 'Footwear', 'Outdoors', 'Technology', 'Pet Shop', 'Book Shop', 'Discs Shop', 'Health and Beauty ']
 market_arr = ['LATAM', 'Pacific Asia', 'Europe', 'Africa', 'USCA']
 
-ppo_delta_by_dept_col = pd.DataFrame()
-for dept in market_arr:
-    dept_rows = c_df[c_df["market"] == dept]
-    dept_rows["profit_per_order_delta_lag_dept"] = dept_rows.profit_per_order.diff()
-    ppo_delta_by_dept_col = pd.concat([ppo_delta_by_dept_col, dept_rows["profit_per_order_delta_lag_dept"]])
-ppo_delta_by_dept_col.sort_index(inplace=True)
-c_df["profit_per_order_delta_lag_dept"] = ppo_delta_by_dept_col
-
-def graph_time_series(df:pd.DataFrame, dependent_var:str, freq:str|None=None, kind:str="line", start=None) -> None:
+def graph_time_series(
+        df:pd.DataFrame,
+        dependent_var:str,
+        freq:str|None=None,
+        kind:str="line",
+        start:pd.Timestamp|None=None,
+        save_loc:str|None=None,
+        y_lim:tuple[float, float]|None=None
+) -> None:
     time_series = df[dependent_var]
     if freq is not None:
         time_series = df[dependent_var].resample(freq).mean()
@@ -36,14 +36,70 @@ def graph_time_series(df:pd.DataFrame, dependent_var:str, freq:str|None=None, ki
     if kind == "line":
         time_series.plot()
     elif kind == "scatter":
-        plt.scatter(x=time_series.index, y=time_series.values, s=2)
+        data = time_series.dropna()
+
+        # Express time as the number of days since the first observation
+        x = (data.index - data.index[0]).total_seconds() / 86_400
+        y = data.to_numpy()
+
+        # Calculate the regression
+        result = linregress(x, y)
+        y_pred = result.slope * x + result.intercept
+
+        # Plot the observations and regression line
+        fig, ax = plt.subplots(figsize=(10, 6))
+
+        ax.scatter(data.index, y, s=20, alpha=0.6, label="Observed")
+        ax.plot(
+            data.index,
+            y_pred,
+            color="red",
+            linewidth=2,
+            label="Linear regression",
+        )
+
+        # Display the equation and R-squared value
+        equation = (
+            f"y = {result.slope:.4f}x {result.intercept:+.4f}\n"
+            f"$R^2$ = {result.rvalue ** 2:.4f}\n"
+            f"x = days since {data.index[0]:%Y-%m-%d}"
+        )
+
+        ax.text(
+            0.05,
+            0.95,
+            equation,
+            transform=ax.transAxes,
+            verticalalignment="top",
+            bbox={
+                "facecolor": "white",
+                "edgecolor": "gray",
+                "alpha": 0.8,
+            },
+        )
+
+        ax.set_xlabel("Date")
+        ax.set_ylabel(data.name or dependent_var)
+        ax.set_title("Time Series with Linear Regression")
+        ax.legend()
+        ax.grid(alpha=0.3)
+
+        fig.autofmt_xdate()
+        plt.tight_layout()
     else:
         raise ValueError(f"Unsupported graph type: {kind}")
     plt.xlabel("Time")
     plt.ylabel(dependent_var)
-    plt.show()
+    if y_lim is not None:
+        bot, top = y_lim
+        plt.ylim(bot,top)
+    if save_loc is not None:
+        plt.savefig(save_loc)
+    else:
+        plt.show()
+    plt.close()
 
-def categorical_data_before_and_after(df: pd.DataFrame, tbreak: str) -> None:
+def categorical_data_before_and_after(df: pd.DataFrame, tbreak: str, save:bool=False) -> None:
     try:
         datetime.strptime(tbreak, "%Y-%m-%d")
     except ValueError:
@@ -80,13 +136,163 @@ def categorical_data_before_and_after(df: pd.DataFrame, tbreak: str) -> None:
         ax.set_xticks(x)
         ax.set_ylabel("Sale Percentage")
         if len(bf) == len(dept_name_arr):
-            ax.set_title("Department Sales Info Before vs After")
-            ax.set_xticklabels([ d[0:3] for d in dept_name_arr ])
+            title = "Department Sales Info Before vs After"
+            ax.set_title(title)
+            ax.set_xticklabels([ d.split()[0] for d in dept_name_arr ], rotation=30)
+            ax.tick_params(axis='x', labelsize=8)
         else:
-            ax.set_title("Market Sales Info Before vs After")
+            title = "Market Sales Info Before vs After"
+            ax.set_title(title)
             ax.set_xticklabels(market_arr)
-        plt.show()
+        if save:
+            plt.savefig('_'.join(title.split()))
+        else:
+            plt.show()
         plt.close()
+
+def categories_for_extreme_data(df:pd.DataFrame, dependent_var:str, lcl, ucl, save_loc:str|None=None) -> None:
+    required_columns = {dependent_var, "department_name", "market"}
+    missing_columns = required_columns.difference(df.columns)
+
+    if missing_columns:
+        raise KeyError(f"Missing columns: {sorted(missing_columns)}")
+
+    # Select extreme observations
+    positive_extremes = df[df[dependent_var] >= ucl]
+    negative_extremes = df[df[dependent_var] <= lcl]
+
+    # Count extremes by department
+    department_counts = pd.DataFrame({
+        "Positive": positive_extremes["department_name"].value_counts(),
+        "Negative": negative_extremes["department_name"].value_counts(),
+    }).fillna(0).astype(int)
+
+    # Count extremes by market
+    market_counts = pd.DataFrame({
+        "Positive": positive_extremes["market"].value_counts(),
+        "Negative": negative_extremes["market"].value_counts(),
+    }).fillna(0).astype(int)
+
+    # Sort by total number of extremes
+    department_counts = department_counts.loc[
+        department_counts.sum(axis=1).sort_values(ascending=False).index
+    ]
+    market_counts = market_counts.loc[
+        market_counts.sum(axis=1).sort_values(ascending=False).index
+    ]
+
+    fig, axes = plt.subplots(2, 1, figsize=(12, 10))
+
+    for ax, counts, title, xlabel in [
+        (
+                axes[0],
+                department_counts,
+                "Extreme Observations by Department",
+                "Department",
+        ),
+        (
+                axes[1],
+                market_counts,
+                "Extreme Observations by Market",
+                "Market",
+        ),
+    ]:
+        positions = np.arange(len(counts))
+        width = 0.4
+
+        positive_bars = ax.bar(
+            positions - width / 2,
+            counts["Positive"],
+            width,
+            color="tab:blue",
+            label=f"Positive",
+        )
+
+        negative_bars = ax.bar(
+            positions + width / 2,
+            counts["Negative"],
+            width,
+            color="tab:red",
+            label=f"Negative",
+        )
+
+        ax.set_title(title)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel("Number of observations")
+        ax.set_xticks(positions)
+        ax.set_xticklabels(counts.index.astype(str), rotation=45, ha="right")
+        ax.legend()
+        ax.grid(axis="y", alpha=0.3)
+
+        # Print counts above each bar
+        ax.bar_label(positive_bars, padding=3, fontsize=8)
+        ax.bar_label(negative_bars, padding=3, fontsize=8)
+
+    plt.tight_layout()
+    if save_loc is not None:
+        plt.savefig(save_loc)
+    else:
+        plt.show()
+    plt.close()
+
+def plot_categorical_data(df:pd.DataFrame, category:str, freq:str, save_loc:str|None=None) -> None:
+    colors = [
+        "#4E79A7",  # blue
+        "#F28E2B",  # orange
+        "#E15759",  # red
+        "#76B7B2",  # teal
+        "#59A14F",  # green
+        "#EDC948",  # yellow
+        "#B07AA1",  # purple
+        "#FF9DA7",  # pink
+        "#9C755F",  # brown
+        "#BAB0AC",  # gray
+        "#17BECF",  # cyan
+    ]
+    data = df.sort_index()
+    category_values = data[category].dropna().unique()
+
+    category_colors = {
+        value: colors[i % len(colors)]
+        for i, value in enumerate(category_values)
+    }
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+
+    for value in category_values:
+        counts = (
+            data.loc[data[category] == value]
+            .resample(freq)
+            .size()
+        )
+
+        ax.plot(
+            counts.index,
+            counts,
+            color=category_colors[value],
+            marker="o",
+            markersize=4,
+            linewidth=2,
+            label=str(value),
+        )
+
+    ax.set_title(f"Observation Count by {category}")
+    ax.set_xlabel("Date")
+    ax.set_ylabel(f"Number of observations per {freq}")
+    ax.legend(
+        title=category,
+        bbox_to_anchor=(1.02, 1),
+        loc="upper left",
+    )
+    ax.grid(alpha=0.3)
+
+    fig.autofmt_xdate()
+    plt.tight_layout()
+    if save_loc is not None:
+        plt.savefig(save_loc)
+    else:
+        plt.show()
+    plt.close()
 
 def generate_histogram_from_df(df: pd.DataFrame, dependent_var: str, bins:int=50, freq=None, xlim=(-750,750)) -> None:
     clean_df = df[dependent_var]
@@ -214,25 +420,24 @@ def df_rows_from_timestamp_arr(df:pd.DataFrame, time_arr:list[tuple[pd.Timestamp
 
     return pd.concat(pieces) if pieces else df.iloc[0:0].copy()
 
-#graph_time_series(c_df, "profit_per_order_delta_lag_1", "D", kind='scatter')
-#graph_time_series(c_df, "profit_per_order_delta_lag_dept", "ME")
-#categorical_data_before_and_after(c_df, '2018-01-01')
-
-#c_df_pre_2018 = c_df[ c_df.index <= '2018-01-01' ].dropna()
-#c_df_post_2017 = c_df[ c_df.index >= '2018-01-01' ].dropna()
-#generate_histogram_from_df(c_df_pre_2018, "profit_per_order_delta_lag_1")
-#generate_histogram_from_df(c_df_pre_2018, "profit_per_order_delta_lag_1", freq='D')
-#generate_histogram_from_df(c_df_post_2017, "profit_per_order_delta_lag_1", xlim=(-400,400))
-#generate_histogram_from_df(c_df_post_2017, "profit_per_order_delta_lag_1", freq='D', xlim=(-400,400))
+def df_normalize_by_category(df:pd.DataFrame, dependent_var:str, category:str, inplace:bool=False) -> pd.DataFrame|None:
+    global_mean = df[dependent_var].mean()
+    category_means = df.groupby(category)[dependent_var].transform("mean")
+    if inplace:
+        df[f"ppo_norm_by_{category}"] = df[dependent_var] / category_means * global_mean
+        return None
+    else:
+        new_df = df.copy()
+        new_df[dependent_var] = df[dependent_var] / category_means * global_mean
+        return new_df
 
 ppo_df = pd.DataFrame()
-ppo_df['profit_per_order'] = c_df.profit_per_order.resample('W').mean()
+ppo_df['profit_per_order'] = c_df.profit_per_order.resample('ME').mean()
 ppo_df['delta_lag_1'] = ppo_df.profit_per_order.diff()
 
-graph_time_series(ppo_df, 'delta_lag_1', kind='line')
-generate_histogram_from_df(ppo_df, "delta_lag_1")
+graph_time_series(ppo_df, 'delta_lag_1', kind='scatter', save_loc='media/linear_regression/0_simple.jpg')
 
-(neg, pos) = df_fetch_extreme_resample_indices(ppo_df, "delta_lag_1", freq='W')
+(neg, pos) = df_fetch_extreme_resample_indices(ppo_df, "delta_lag_1", freq='ME')
 print("NEGATIVE EXTREMES:")
 for row in neg:
     print(row)
@@ -240,9 +445,41 @@ print("\nPOSITIVE EXTREMES:")
 for row in pos:
     print(row)
 
+
 neg_df = df_rows_from_timestamp_arr(c_df, neg)
 pos_df = df_rows_from_timestamp_arr(c_df, pos)
 print("\n\nNEGATIVE EXTREME ROWS:")
 print(neg_df[['department_name', 'market', 'profit_per_order']].to_markdown())
 print("\nPOSITIVE EXTREME ROWS:")
 print(pos_df[['department_name', 'market', 'profit_per_order']].to_markdown())
+
+extreme_df = pd.concat([neg_df, pos_df])
+categories_for_extreme_data(extreme_df, 'profit_per_order', 0, 0, save_loc='media/linear_regression/categories_for_extreme_data.jpg')
+
+plot_categorical_data(c_df, 'department_name', freq='ME', save_loc='media/linear_regression/department_name_sales_per_ME.jpg')
+plot_categorical_data(c_df, 'market', freq='ME', save_loc='media/linear_regression/market_sales_per_ME.jpg')
+
+ppo_df = pd.DataFrame()
+ppo_df['profit_per_order'] = c_df[ c_df.index <= '2018-01-01' ].profit_per_order.resample('ME').mean()
+ppo_df['delta_lag_1'] = ppo_df.profit_per_order.diff()
+
+graph_time_series(ppo_df, 'delta_lag_1', kind='scatter', save_loc='media/linear_regression/1_simple_p2018.jpg', y_lim=(-40,40))
+
+categories = ['department_name', 'market', 'order_item_quantity']
+for i in range(len(categories)):
+    cat_df = df_normalize_by_category(c_df, 'profit_per_order', categories[i])
+    ppo_df['profit_per_order'] = cat_df[cat_df.index <= '2018-01-01'].profit_per_order.resample('ME').mean()
+    ppo_df['delta_lag_1'] = ppo_df.profit_per_order.diff()
+    graph_time_series(ppo_df, 'delta_lag_1', kind='scatter', save_loc=f'media/linear_regression/{i+2}_norm_{categories[i]}.jpg', y_lim=(-40, 40))
+
+graph_time_series(c_df, 'profit_per_order', kind='line', save_loc='media/linear_regression/control_chart.jpg')
+ppo_df = pd.DataFrame()
+ppo_df['profit_per_order'] = c_df.profit_per_order.resample('ME').mean()
+graph_time_series(ppo_df, 'profit_per_order', kind='line', save_loc='media/linear_regression/control_chart_weekly_avg.jpg')
+
+cat_df = c_df.copy()
+for i in range(len(categories)):
+    cat_df = df_normalize_by_category(cat_df, 'profit_per_order', categories[i])
+ppo_df['profit_per_order'] = cat_df[cat_df.index <= '2018-01-01'].profit_per_order.resample('ME').mean()
+ppo_df['delta_lag_1'] = ppo_df.profit_per_order.diff()
+graph_time_series(ppo_df, 'delta_lag_1', kind='scatter', save_loc=f'media/linear_regression/5_complete_norm.jpg', y_lim=(-40, 40))

@@ -511,3 +511,4 @@ for row in last_stationary_state:
     print(row)
 print("REWARD-TO-RISK:", calculate_risk(last_stationary_state))
 explore_extreme_values_wrt_department(last_data_frame, global_lcl, global_ucl)
+
